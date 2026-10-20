@@ -1,0 +1,45 @@
+.call-panel{border-bottom:1px solid var(--line,#e9e8e2);background:var(--surface,#fff);font:inherit;color:inherit}
+.call-start-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:13px 30px}
+.call-invitation{display:flex;align-items:center;gap:11px;min-width:0}
+.call-invitation-icon{display:grid;place-items:center;flex-shrink:0;width:36px;height:36px;border-radius:11px;background:#f5f3ed;color:#8e7864}
+.call-invitation strong{display:block;font-size:12px;font-weight:650;letter-spacing:.01em}
+.call-invitation small{display:block;margin-top:3px;color:#8a8b88;font-size:11px;line-height:1.4}
+.call-start-actions{display:flex;gap:7px;flex-shrink:0}
+.call-start-button{display:flex;align-items:center;justify-content:center;gap:7px;padding:9px 12px;min-height:37px;border:1px solid #e5e4dd;border-radius:9px;background:#fff;color:#4e5350;font:inherit;font-size:11px;font-weight:650;cursor:pointer;transition:background .18s,border-color .18s}
+.call-start-button:hover{background:#f9f7f2;border-color:#cbc9bf}
+.call-start-button.call-start-primary{background:#fbefe8;border-color:#f6dfd1;color:#b3623a}
+.call-start-button.call-start-primary:hover{background:#f9e4d8}
+.call-start-button:disabled,.call-control:disabled{opacity:.5;cursor:wait}
+.call-live-dot{display:inline-block;flex-shrink:0;width:6px;height:6px;border-radius:50%;background:#77ba96;box-shadow:0 0 0 3px #77ba961b}
+.call-panel-active{position:relative;background:#242e2b;border-bottom-color:#242e2b;padding:16px 24px 13px;color:#fff}
+.call-active-heading{margin-bottom:12px;font-size:11px;font-weight:600;color:#dce5df}
+.call-active-heading>span{display:flex;align-items:center;gap:8px}
+.call-participant-count{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:18px;border-radius:5px;background:#ffffff14;font-size:10px;font-weight:500;color:#c0cbc3}
+.call-video-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:9px;max-height:330px;overflow:auto;scrollbar-width:thin}
+.call-tile{position:relative;isolation:isolate;min-width:0;height:158px;overflow:hidden;border-radius:11px;background:linear-gradient(140deg,#394740,#303a35)}
+.call-tile video{width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .15s}
+.call-tile.has-camera video{opacity:1}
+.call-local-video{transform:scaleX(-1)}
+.call-avatar{display:grid;place-items:center;position:absolute;left:50%;top:45%;transform:translate(-50%,-50%);width:52px;height:52px;border-radius:50%;background:#c7bfa122;color:#e9ddc4;font-size:24px;font-weight:500}
+.call-tile:nth-child(2n) .call-avatar{background:#a6bcc526;color:#c1dbe5}
+.call-tile-caption{display:flex;justify-content:space-between;align-items:center;gap:8px;position:absolute;left:0;right:0;bottom:0;padding:21px 10px 9px;background:linear-gradient(transparent,#101c1890);font-size:10px;color:#f4f6f2}
+.call-tile-caption>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.call-connection-state{position:absolute;top:9px;left:9px;max-width:calc(100% - 18px);padding:4px 6px;border-radius:5px;background:#17251f99;color:#d5ddd5;font-size:9px}
+.call-connection-state.failed{color:#ffd2c6;background:#5d2828b0}
+.call-play{position:absolute;top:45%;left:50%;display:flex;align-items:center;gap:6px;transform:translate(-50%,-50%);border:0;border-radius:8px;background:#fff;color:#28352e;padding:9px 11px;white-space:nowrap;font:inherit;font-size:10px;cursor:pointer;box-shadow:0 2px 12px #0003;z-index:1}
+.call-waiting{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:158px;padding:12px 22px;color:#b7c4ba;text-align:center;font-size:11px;line-height:1.5}
+.call-waiting-rings{display:grid;place-items:center;width:45px;height:45px;border:1px solid #63736888;border-radius:50%;color:#9db0a2;box-shadow:0 0 0 8px #6b7b6e0a,0 0 0 16px #6b7b6e05}
+.call-controls{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:12px}
+.call-control{display:flex;align-items:center;justify-content:center;gap:8px;min-width:35px;height:34px;padding:0 10px;border:1px solid #ffffff1c;border-radius:9px;background:#ffffff0e;color:#e0e8e0;cursor:pointer;transition:background .15s;font:inherit;font-size:11px;font-weight:550}
+.call-control:hover{background:#ffffff22}
+.call-control-off{background:#ffffff23}
+.call-controls-divider{height:20px;width:1px;background:#ffffff24;margin:0 3px}
+.call-control.call-hangup{border-color:#cf5545;background:#cf5545;color:#fff;padding:0 13px}
+.call-control.call-hangup:hover{background:#b74739}
+.call-error{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:0;padding:11px 24px;background:#fff1eb;color:#945035;font-size:12px;line-height:1.6}
+.call-error>button{display:grid;place-items:center;flex-shrink:0;border:0;padding:2px;border-radius:4px;background:transparent;color:inherit;cursor:pointer}
+.call-panel-active .call-error{margin:12px 0 0;border-radius:8px;padding:9px 11px;background:#5d3b32;color:#ffe4d7;font-size:11px}
+.call-panel button:focus-visible{outline:2px solid #ee7952;outline-offset:3px}
+@media(max-width:700px){.call-start-row{padding:11px 17px;gap:9px}.call-invitation{gap:8px}.call-invitation-icon{width:30px;height:30px;border-radius:9px}.call-invitation strong{font-size:11px}.call-invitation small{font-size:10px;max-width:150px}.call-start-button{padding:8px 9px;font-size:10px;gap:5px}.call-start-button svg{width:16px;height:16px}.call-start-actions{gap:5px}.call-panel-active{padding:12px 15px 11px}.call-tile{height:134px}.call-video-grid{grid-template-columns:repeat(auto-fit,minmax(125px,1fr));max-height:285px}.call-waiting{min-height:134px;font-size:10px;padding:12px}.call-error{padding:10px 17px;font-size:11px}}
+@media(max-width:410px){.call-start-row{align-items:flex-start}.call-invitation-icon{display:none}.call-invitation small{max-width:125px}.call-start-button{padding:8px}.call-start-button span{font-size:9px}.call-tile{height:124px}.call-video-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.call-waiting{min-height:124px}}
+.call-walkie{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:7px;margin-top:14px}.call-talk-button{display:flex;align-items:center;justify-content:center;gap:9px;min-height:45px;min-width:190px;padding:11px 24px;border:1px solid #a9b5a442;border-radius:25px;background:#4c6556;color:#eff8ee;font:inherit;font-weight:650;font-size:12px;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;transition:background .12s,box-shadow .12s}.call-talk-button:hover{background:#597863}.call-talk-button.call-talk-active{background:#e68b5b;border-color:#f1b28e;box-shadow:0 0 0 4px #eea66d18;color:#fff}.call-walkie>span{font-size:10px;color:#aebfb1;text-align:center;line-height:1.5}.call-hands-free span{font-size:10px}.call-walkie+.call-controls{margin-top:10px}@media(max-width:410px){.call-hands-free{max-width:132px}.call-hands-free span{font-size:9px}.call-walkie>span{max-width:240px}}
