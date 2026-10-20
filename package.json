@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3000 --strictPort",
     "build": "vite build",
+    "build:github": "vite build --base=/chattamento/ --outDir=docs",
     "start": "vite preview --host 0.0.0.0 --port 3000 --strictPort",
     "test": "node --test --test-concurrency=1 tests/*.test.js",
     "test:e2e": "playwright test"

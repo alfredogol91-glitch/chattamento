@@ -4,7 +4,21 @@ Una webapp per ritrovarsi con gli amici Erasmus: scegli una lingua, scegli un ni
 
 Questa versione funziona in diretta, senza un server applicativo da gestire, database o registrazione dei partecipanti. Messaggi e allegati non vengono conservati per chi è offline.
 
-## Metterla online: otto piccoli passi
+## Usarla con GitHub Pages: il metodo consigliato
+
+Il sito è già compilato nella cartella `docs/` del repository. GitHub Pages è gratuito per questo repository pubblico. Puoi attivarlo senza scaricare file e senza altri account:
+
+1. Accedi a GitHub e apri [le impostazioni Pages del repository](https://github.com/alfredogol91-glitch/chattamento/settings/pages).
+2. Nella sezione **Build and deployment**, imposta **Source** su **Deploy from a branch**.
+3. Sotto **Branch**, scegli **main** e, nel menu della cartella, **/docs**.
+4. Premi **Save** e aspetta che GitHub completi la pubblicazione; di solito servono alcuni minuti. Usa **Visit site** quando compare.
+5. Apri il sito, scegli lingua e nickname, premi **Invita amici** e poi **Copia invito**. Manda l’invito completo alle persone che vuoi far entrare.
+
+L’indirizzo previsto è `https://alfredogol91-glitch.github.io/chattamento/`. Diventa disponibile dopo l’attivazione di Pages e la prima pubblicazione riuscita. Il repository contiene anche lo ZIP pronto; non è necessario scaricarlo per usare questo metodo.
+
+Per rigenerare la versione GitHub Pages dopo modifiche al codice, esegui `npm run build:github`, conserva il file `docs/.nojekyll` e carica i file aggiornati nel repository.
+
+## Alternativa: pubblicare lo ZIP su Netlify Drop
 
 L’archivio pronto da pubblicare si chiama **`chattamento-online.zip`**. Contiene già il sito completo: non devi scrivere codice né caricare il progetto su GitHub.
 
