@@ -4,6 +4,7 @@ import { readInvitation, createInvitation, invitationUrl } from './roomInvite.js
 import { translateMessage } from './translate.js';
 import { languages, getT, localeFor } from './i18n.js';
 import CallPanel from './CallPanel.jsx';
+import FolderPanel from './FolderPanel.jsx';
 
 const languageCodes = ['en', 'ru', 'es', 'uk', 'it'];
 const maxFileSize = 25 * 1024 * 1024;
@@ -33,6 +34,8 @@ function errorText(error, t) {
     file_too_large: 'errorFileTooLarge', upload_failed: 'transferFailed', transfer_failed: 'transferFailed',
     rate_limited: 'errorRateLimited', message_required: 'emptyMessage', no_peers: 'waitingForFriends',
     nickname_conflict: 'nicknameConflict', connection_failed: 'roomConnectionError', offline: 'roomOffline',
+    folder_permission_denied: 'foldersPermissionDenied', folder_revoked: 'foldersRevoked', folder_not_found: 'foldersUnavailable',
+    folder_file_unavailable: 'foldersUnavailable', folder_unavailable: 'foldersUnavailable', folder_too_large: 'foldersTooLarge',
   };
   return t(mapping[code] || 'errorGeneric');
 }
@@ -87,6 +90,7 @@ export function Icon({ name, size = 20, ...props }) {
     chevron: <path d="m6 9 6 6 6-6" />,
     down: <><path d="M12 4v16m-6-6 6 6 6-6" /></>,
     file: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Z" /><path d="M14 2v6h6M8 13h8M8 17h5" /></>,
+    folder: <path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />,
     download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></>,
     edit: <><path d="m16 3 5 5M4 20l5-1L21 7a3.5 3.5 0 0 0-5-5L4 14l-1 7Z" /></>,
     menu: <path d="M4 6h16M4 12h16M4 18h16" />,
@@ -123,6 +127,7 @@ function Welcome({ step, setStep, language, onLanguage, onJoin, busy, error, has
         <div className="eyebrow"><span className="small-line" />{t('homeEyebrow')}</div>
         <h1>{t('homeTitle')}<br /><span>{t('homeTitleAccent')}</span></h1>
         <p className="welcome-description">{t('homeDescription')}</p>
+        <p className="folder-entry-note"><Icon name="folder" size={16} />{t('foldersHomeHint')}</p>
         <div className="conversation-illustration" aria-hidden="true">
           <div className="orbit orbit-one" /><div className="orbit orbit-two" />
           <span className="art-spark art-spark-one">✳</span><span className="art-spark art-spark-two">✧</span>
@@ -282,6 +287,9 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
   const [editNickname, setEditNickname] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [foldersOpen, setFoldersOpen] = useState(false);
+  const [localFolders, setLocalFolders] = useState(roomClient.localSharedFolders || []);
+  const [stoppingFolders, setStoppingFolders] = useState(false);
   const [unread, setUnread] = useState(0);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
@@ -320,6 +328,7 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
       roomClient.on('profile', profile => { if (active) setUser(profile.user || profile); }),
       roomClient.on('error', err => { if (active) setError(err); }),
       roomClient.on('nickname-conflict', () => { if (active) { setConflict(true); setEditNickname(true); } }),
+      roomClient.on('folders', data => { if (active) setLocalFolders(data.local || []); }),
     ];
     roomClient.connect().then(() => { if (active) setUser(roomClient.user); }).catch(err => { if (active) { setError(err); setStatus('error'); } });
     return () => { active = false; for (const unsubscribe of subscriptions) unsubscribe?.(); roomClient.leave(); };
@@ -372,6 +381,12 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
     if (nearBottom.current) setUnread(0);
   };
   const statusKey = status === 'connected' ? 'connected' : isWaiting ? 'waitingForFriends' : status === 'connecting' ? 'roomConnecting' : status === 'error' ? 'roomConnectionError' : 'roomOffline';
+  const stopFolders = async () => {
+    setStoppingFolders(true);
+    try { for (const folder of localFolders) await roomClient.stopSharingFolder(folder.id); }
+    catch (err) { setError(err); }
+    finally { setStoppingFolders(false); }
+  };
 
   return <div className="chat-app">
     {sidebarOpen && <button className="sidebar-backdrop" aria-label={t('close')} type="button" onClick={() => setSidebarOpen(false)} />}
@@ -386,6 +401,7 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
     <main className="chat-main">
       <header className="room-header"><div className="room-header-title"><button className="icon-button sidebar-toggle" type="button" aria-label={t('participants')} onClick={() => setSidebarOpen(true)}><Icon name="menu" /></button><span className="header-room-icon"><Icon name="chat" size={24} /></span><div><h1>{t('roomName')}</h1><p><span className={`status-dot ${status === 'connected' ? '' : 'status-offline'}`} />{t(statusKey)}<span className="header-dot">·</span><span className="header-room-description">{t('onlineCount', { count: onlineUsers.length })}</span></p></div></div><button type="button" className="button button-primary invite-header-button" onClick={() => setInviteOpen(true)}><Icon name="users" size={16} /><span>{t('inviteFriends')}</span></button></header>
       {(status === 'offline' || status === 'error') && <div className="connection-banner" role="status"><Icon name="info" size={15} />{t(statusKey)}</div>}
+      <div className="folders-toolbar"><button className="folders-open-button" type="button" onClick={() => setFoldersOpen(true)}><Icon name="folder" size={17} />{t('foldersOpen')}</button>{localFolders.length > 0 && <div className="folders-toolbar-live"><span className="status-dot" /><strong>{t('foldersSharingLive')}</strong><button type="button" onClick={stopFolders} disabled={stoppingFolders}>{t('foldersStop')}</button></div>}</div>
       <div className="call-area"><CallPanel roomClient={roomClient} user={user} users={onlineUsers} t={t} /></div>
       <div className="conversation-body">
         <div className="messages-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -412,6 +428,7 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
     </main>
     {editNickname && <NicknameDialog key={conflict ? 'conflict' : 'edit'} user={user} roomClient={roomClient} onUpdate={setUser} conflict={conflict} onClose={() => { setEditNickname(false); setConflict(false); }} t={t} />}
     {inviteOpen && <InvitationDialog invitation={invitation} onClose={() => setInviteOpen(false)} t={t} />}
+    {foldersOpen && <FolderPanel roomClient={roomClient} language={language} t={t} onClose={() => setFoldersOpen(false)} />}
   </div>;
 }
 

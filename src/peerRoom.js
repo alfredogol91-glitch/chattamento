@@ -1,3 +1,5 @@
+import { createFolderService } from './folderService.js';
+
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 export const SUPPORTED_LANGUAGES = ['en', 'ru', 'es', 'uk', 'it'];
 export const SIGNALING_RELAYS = ['wss://tracker.webtorrent.dev', 'wss://tracker.openwebtorrent.com'];
@@ -53,6 +55,7 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
   let status = 'offline';
   let room;
   let profileAction, messageAction, fileAction;
+  let folderService;
   let connecting;
   let left = false;
   let conflictWinner = null;
@@ -66,6 +69,8 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
   const setStatus = next => {
     if (status === next) return;
     status = next;
+    if (['offline', 'error'].includes(next)) folderService?.suspend();
+    else if (!user.nicknameConflict) folderService?.resume();
     if (['offline', 'error'].includes(next) && user.inCall) {
       user = { ...user, inCall: false, audio: false, video: false };
       emit('profile', { ...user });
@@ -90,6 +95,8 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
     emit('profile', { ...user });
     const current = users();
     emit('presence', { users: current, total: current.length });
+    if (!user.nicknameConflict && !['offline', 'error'].includes(status)) folderService?.resume();
+    folderService?.profileChanged();
     if (room && !left && status !== 'error') setStatus(globalThis.navigator?.onLine === false ? 'offline' : profiles.size ? 'connected' : 'waiting');
   };
   const broadcastProfile = target => profileAction.send({ ...user }, target ? { target } : undefined);
@@ -134,6 +141,8 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
     get users() { return users(); },
     get status() { return status; },
     get connected() { return !!room && !left && !['offline', 'error'].includes(status); },
+    get sharedFolders() { return folderService?.sharedFolders || []; },
+    get localSharedFolders() { return folderService?.localSharedFolders || []; },
     on(event, listener) {
       if (typeof listener !== 'function') return () => {};
       if (!handlers.has(event)) handlers.set(event, new Set());
@@ -161,6 +170,11 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
           room = transport.room || transport;
           user = { ...user, id: transport.selfId || transport.peerId || room.selfId || user.id };
           if (typeof room.makeAction !== 'function') throw codeError('connection_failed');
+          folderService = createFolderService({
+            room, getUser: () => user, getPeers: () => [...profiles.values()],
+            canPeer: peerId => !left && peerIds.has(peerId) && profiles.has(peerId) && !isConflicted(profiles.get(peerId)),
+            emit, maxFileSize: MAX_ATTACHMENT_BYTES,
+          });
           profileAction = room.makeAction('profile');
           messageAction = room.makeAction('message');
           fileAction = room.makeAction('attachment');
@@ -172,6 +186,7 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
             profiles.set(peerId, { id: peerId, nickname: name, language: profile.language, claimedAt: profile.claimedAt, inCall: profile.inCall === true, audio: profile.audio === true, video: profile.video === true });
             if (status === 'error') setStatus('connected');
             presence();
+            folderService.peerJoined(peerId).catch(() => {});
           };
           messageAction.onReceive = ({ byteLength }) => byteLength <= 20_000;
           messageAction.onMessage = (message, { peerId } = {}) => receiveMessage(message, peerId);
@@ -193,6 +208,7 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
           room.onPeerLeave = peerId => {
             peerIds.delete(peerId);
             profiles.delete(peerId);
+            folderService.peerLeft(peerId);
             emit('peer-left', { peerId });
             if (status === 'error') setStatus('waiting');
             presence();
@@ -214,6 +230,7 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
           if (status === 'connecting' || status === 'offline') setStatus(globalThis.navigator?.onLine === false ? 'offline' : 'waiting');
           return { user: { ...user } };
         } catch (error) {
+          folderService?.dispose();
           if (room) { try { await room.leave(); } catch {} room = null; }
           if (!left) { setStatus('error'); emitError(error?.code || 'connection_failed'); }
           throw codeError(error?.code || 'connection_failed');
@@ -271,6 +288,11 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
       await broadcastProfile();
       return { ...user };
     },
+    async shareFolder(share) { ensureRoom(); return folderService.shareFolder(share); },
+    async stopSharingFolder(id) { return folderService?.stopSharingFolder(id); },
+    async browseFolder(request) { ensureRoom(); return folderService.browseFolder(request); },
+    async downloadSharedFile(request) { ensureRoom(); return folderService.downloadSharedFile(request); },
+    releaseSharedFile(url) { folderService?.releaseSharedFile(url); },
     async addStream(stream, target) { ensureRoom(); return settleMedia(room.addStream(stream, target ? { target } : undefined)); },
     async removeStream(stream, target) { if (room && !left) return settleMedia(room.removeStream(stream, target ? { target } : undefined)); },
     async addTrack(track, stream, target) { ensureRoom(); return settleMedia(room.addTrack(track, stream, target ? { target } : undefined)); },
@@ -281,6 +303,7 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
       if (left) return;
       left = true;
       removeNetworkListeners();
+      folderService?.dispose();
       if (room) {
         room.onPeerJoin = null; room.onPeerLeave = null; room.onPeerStream = null; room.onPeerTrack = null;
         for (const action of [profileAction, messageAction, fileAction]) if (action) { action.onMessage = null; action.onReceive = null; }
