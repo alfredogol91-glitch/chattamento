@@ -8,7 +8,10 @@ import { fileURLToPath } from 'node:url';
 const vite = await createServer({
   configFile: false,
   plugins: [react()],
-  resolve: { alias: [{ find: '@trystero-p2p/torrent', replacement: fileURLToPath(new URL('./fixtures/trystero.js', import.meta.url)) }] },
+  resolve: { alias: [
+    { find: './hybridRoom.js', replacement: fileURLToPath(new URL('./fixtures/hybridRoom.js', import.meta.url)) },
+    { find: '@trystero-p2p/torrent', replacement: fileURLToPath(new URL('./fixtures/trystero.js', import.meta.url)) },
+  ] },
   server: { host: '127.0.0.1', port: 3100, strictPort: true },
 });
 const wss = new WebSocketServer({ noServer: true });

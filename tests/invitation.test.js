@@ -10,7 +10,7 @@ test('invites contain independent random room and key, carried only in the fragm
   assert.notEqual(first.roomId, second.roomId);
   assert.notEqual(first.password, second.password);
   const url = new URL(invitationUrl(first, 'https://example.org/?tracking=old#old'));
-  assert.equal(url.search, '');
+  assert.equal(url.search, '?v=2');
   assert.ok(!`${url.origin}${url.pathname}${url.search}`.includes(first.password));
   assert.deepEqual(readInvitation(url.hash), first);
 });

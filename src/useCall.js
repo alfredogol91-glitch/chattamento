@@ -29,6 +29,7 @@ export function useCall({ roomClient, user, users = [] }) {
   const mediaRef = useRef({ audio: false, video: false });
   const streamRef = useRef(null);
   const sentPeersRef = useRef(new Set());
+  const mediaAttemptsRef = useRef(new Map());
   const remoteStreamsRef = useRef(new Map());
   const generationRef = useRef(0);
   const cameraBusyRef = useRef(false);
@@ -68,19 +69,25 @@ export function useCall({ roomClient, user, users = [] }) {
     for (const peerId of [...sentPeersRef.current]) {
       if (targets.has(peerId)) continue;
       sentPeersRef.current.delete(peerId);
+      mediaAttemptsRef.current.delete(peerId);
       remoteStreamsRef.current.delete(peerId);
       Promise.resolve(client.removeStream(stream, peerId)).catch(() => {});
     }
     for (const peerId of targets) {
       if (sentPeersRef.current.has(peerId)) continue;
       sentPeersRef.current.add(peerId);
+      const attempt = Symbol(peerId);
+      mediaAttemptsRef.current.set(peerId, attempt);
       Promise.resolve(client.addStream(stream, peerId)).then(() => {
+        if (mediaAttemptsRef.current.get(peerId) !== attempt) return;
         // A permission dialog, leave, or another participant's departure can
         // finish while the room is negotiating the stream.
         if (generation !== generationRef.current || !activeRef.current || !sentPeersRef.current.has(peerId)) {
           Promise.resolve(client.removeStream(stream, peerId)).catch(() => {});
         }
       }).catch(() => {
+        if (mediaAttemptsRef.current.get(peerId) !== attempt) return;
+        mediaAttemptsRef.current.delete(peerId);
         sentPeersRef.current.delete(peerId);
         if (mountedRef.current && generation === generationRef.current && activeRef.current) setError('connectionFailed');
       });
@@ -105,6 +112,7 @@ export function useCall({ roomClient, user, users = [] }) {
     }
     streamRef.current = null;
     sentPeersRef.current.clear();
+    mediaAttemptsRef.current.clear();
     remoteStreamsRef.current.clear();
     mediaRef.current = { audio: false, video: false };
     handsFreeRef.current = false;
@@ -186,13 +194,31 @@ export function useCall({ roomClient, user, users = [] }) {
       const person = usersRef.current.find((item) => item.id === peerId);
       if (!activeRef.current || !person?.inCall || peerId === userRef.current?.id) return;
       remoteStreamsRef.current.set(peerId, stream);
+      setError(current => current === 'connectionFailed' ? null : current);
       syncPeers();
     };
     const onPeerLeft = ({ peerId }) => {
       sentPeersRef.current.delete(peerId);
+      mediaAttemptsRef.current.delete(peerId);
       remoteStreamsRef.current.delete(peerId);
       usersRef.current = usersRef.current.filter((person) => person.id !== peerId);
       syncPeers();
+    };
+    const onMediaPeerJoined = ({ peerId }) => {
+      if (!activeRef.current) return;
+      sentPeersRef.current.delete(peerId);
+      mediaAttemptsRef.current.delete(peerId);
+      setError(current => current === 'connectionFailed' ? null : current);
+      reconcileParticipants(roomClient.users || usersRef.current);
+    };
+    const onMediaPeerLeft = ({ peerId }) => {
+      sentPeersRef.current.delete(peerId);
+      mediaAttemptsRef.current.delete(peerId);
+      remoteStreamsRef.current.delete(peerId);
+      if (activeRef.current) {
+        if (usersRef.current.some(person => person.id === peerId && person.inCall)) setError('connectionFailed');
+        syncPeers();
+      }
     };
     const onStatus = (event) => {
       const status = typeof event === 'string' ? event : event.status;
@@ -204,11 +230,15 @@ export function useCall({ roomClient, user, users = [] }) {
     roomClient.on('presence', onPresence);
     roomClient.on('stream', onStream);
     roomClient.on('peer-left', onPeerLeft);
+    roomClient.on('media-peer-joined', onMediaPeerJoined);
+    roomClient.on('media-peer-left', onMediaPeerLeft);
     roomClient.on('status', onStatus);
     return () => {
       roomClient.off('presence', onPresence);
       roomClient.off('stream', onStream);
       roomClient.off('peer-left', onPeerLeft);
+      roomClient.off('media-peer-joined', onMediaPeerJoined);
+      roomClient.off('media-peer-left', onMediaPeerLeft);
       roomClient.off('status', onStatus);
       finish(true, roomClient);
     };

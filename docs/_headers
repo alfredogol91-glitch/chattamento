@@ -3,4 +3,4 @@
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Permissions-Policy: camera=(self), microphone=(self), geolocation=()
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https://api.mymemory.translated.net wss://tracker.webtorrent.dev wss://tracker.openwebtorrent.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https://api.mymemory.translated.net wss://tracker.webtorrent.dev wss://tracker.openwebtorrent.com wss://broker.hivemq.com:8884 wss://broker.emqx.io:8084; object-src 'none'; base-uri 'self'; frame-ancestors 'none'

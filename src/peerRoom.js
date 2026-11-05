@@ -54,9 +54,13 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
   let user = { id: crypto.randomUUID(), nickname, language, inCall: false, audio: false, video: false, claimedAt: Date.now(), nicknameConflict: false };
   let status = 'offline';
   let room;
+  let transportOnline = true;
   let profileAction, messageAction, fileAction;
   let folderService;
   let connecting;
+  let reconnecting;
+  let startingRetry = false;
+  let lifecycle = 0;
   let left = false;
   let conflictWinner = null;
   let removeNetworkListeners = () => {};
@@ -97,7 +101,7 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
     emit('presence', { users: current, total: current.length });
     if (!user.nicknameConflict && !['offline', 'error'].includes(status)) folderService?.resume();
     folderService?.profileChanged();
-    if (room && !left && status !== 'error') setStatus(globalThis.navigator?.onLine === false ? 'offline' : profiles.size ? 'connected' : 'waiting');
+    if (room && !left && status !== 'error') setStatus(globalThis.navigator?.onLine === false || !transportOnline ? 'offline' : profiles.size ? 'connected' : 'waiting');
   };
   const broadcastProfile = target => profileAction.send({ ...user }, target ? { target } : undefined);
   const ensureRoom = (allowConflict = false) => {
@@ -136,6 +140,35 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
     if (!left && user.inCall && !user.nicknameConflict && sender?.inCall && !isConflicted(sender)) emit('stream', { stream, peerId });
   };
 
+  const closeTransport = async () => {
+    const previousRoom = room;
+    const previousFolders = folderService;
+    const previousActions = [profileAction, messageAction, fileAction];
+    room = null;
+    folderService = null;
+    profileAction = null; messageAction = null; fileAction = null;
+    removeNetworkListeners();
+    removeNetworkListeners = () => {};
+    previousFolders?.dispose();
+    if (previousRoom) {
+      previousRoom.onPeerJoin = null; previousRoom.onPeerLeave = null;
+      previousRoom.onPeerStream = null; previousRoom.onPeerTrack = null;
+      previousRoom.onMediaPeerJoin = null; previousRoom.onMediaPeerLeave = null;
+      previousRoom.onConnectionState = null;
+      for (const action of previousActions) if (action) { action.onMessage = null; action.onReceive = null; }
+      try { await previousRoom.leave(); } catch { /* Local cleanup still completes after a transport failure. */ }
+    }
+    profiles.clear(); peerIds.clear(); seen.clear(); localMessages.clear();
+    transportOnline = true;
+    for (const url of objectUrls) URL.revokeObjectURL(url);
+    objectUrls.clear();
+    user = { ...user, inCall: false, audio: false, video: false, nicknameConflict: false };
+    conflictWinner = null;
+    emit('profile', { ...user });
+    emit('presence', { users: [], total: 0 });
+    emit('folders', { folders: [], local: [] });
+  };
+
   const client = {
     get user() { return { ...user }; },
     get users() { return users(); },
@@ -152,21 +185,32 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
     off(event, listener) { handlers.get(event)?.delete(listener); },
     async connect() {
       if (left) throw codeError('offline');
+      if (reconnecting && !startingRetry) return reconnecting;
       if (connecting) return connecting;
       if (room) return { user: { ...user } };
+      const generation = ++lifecycle;
+      const current = () => generation === lifecycle && !left;
       setStatus('connecting');
-      connecting = (async () => {
+      const operation = Promise.resolve().then(async () => {
         try {
-          const callbacks = { onJoinError: () => { if (!left) { emitError('connection_failed'); if (!profiles.size) setStatus('error'); } } };
+          if (!current()) throw codeError('offline');
+          const callbacks = { onJoinError: () => {
+            if (!current()) return;
+            // A failed pairing does not invalidate discovery or other connected peers.
+            const diagnostic = { code: 'peer_connection_failed' };
+            emit('peer-connection-error', diagnostic);
+            emitError(diagnostic.code);
+          } };
           let transport;
           const config = { appId: APP_ID, password, maxReceiveBytes: MAX_ATTACHMENT_BYTES, relayConfig: { urls: [...SIGNALING_RELAYS] } };
           if (transportFactory) {
             transport = await transportFactory(config, roomId, callbacks);
           } else {
-            const { joinRoom, selfId } = await import('@trystero-p2p/torrent');
-            transport = { room: joinRoom(config, roomId, callbacks), selfId };
+            const { createHybridRoom } = await import('./hybridRoom.js');
+            if (!current()) throw codeError('offline');
+            transport = await createHybridRoom(config, roomId, callbacks);
           }
-          if (left) { await (transport.room || transport).leave(); throw codeError('offline'); }
+          if (!current()) { try { await (transport.room || transport).leave(); } catch {} throw codeError('offline'); }
           room = transport.room || transport;
           user = { ...user, id: transport.selfId || transport.peerId || room.selfId || user.id };
           if (typeof room.makeAction !== 'function') throw codeError('connection_failed');
@@ -178,9 +222,9 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
           profileAction = room.makeAction('profile');
           messageAction = room.makeAction('message');
           fileAction = room.makeAction('attachment');
-          profileAction.onReceive = ({ byteLength }) => byteLength <= 4096;
+          profileAction.onReceive = ({ byteLength }) => current() && byteLength <= 4096;
           profileAction.onMessage = (profile, { peerId } = {}) => {
-            if (left || !peerIds.has(peerId) || !plainObject(profile)) return;
+            if (!current() || !peerIds.has(peerId) || !plainObject(profile)) return;
             const name = normalizeNickname(profile.nickname);
             if (!validNickname(name) || !SUPPORTED_LANGUAGES.includes(profile.language) || !Number.isFinite(profile.claimedAt) || profile.claimedAt < 0 || profile.claimedAt > Date.now() + 60_000) return;
             profiles.set(peerId, { id: peerId, nickname: name, language: profile.language, claimedAt: profile.claimedAt, inCall: profile.inCall === true, audio: profile.audio === true, video: profile.video === true });
@@ -188,24 +232,34 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
             presence();
             folderService.peerJoined(peerId).catch(() => {});
           };
-          messageAction.onReceive = ({ byteLength }) => byteLength <= 20_000;
-          messageAction.onMessage = (message, { peerId } = {}) => receiveMessage(message, peerId);
+          messageAction.onReceive = ({ byteLength }) => current() && byteLength <= 20_000;
+          messageAction.onMessage = (message, { peerId } = {}) => { if (current()) receiveMessage(message, peerId); };
           fileAction.onReceive = ({ byteLength, metadata, peerId }) => {
             const sender = profiles.get(peerId);
-            return !!sender && !isConflicted(sender) && byteLength >= 0 && byteLength <= MAX_ATTACHMENT_BYTES
+            return current() && !!sender && !isConflicted(sender) && byteLength >= 0 && byteLength <= MAX_ATTACHMENT_BYTES
               && plainObject(metadata) && validMessage(metadata.message) && validId(metadata.id)
               && typeof metadata.name === 'string' && metadata.name.length <= 200 && metadata.size === byteLength;
           };
           fileAction.onMessage = (data, { peerId, metadata } = {}) => {
+            if (!current()) return;
             const bytes = bytesOf(data);
             if (!bytes || bytes.byteLength > MAX_ATTACHMENT_BYTES || !plainObject(metadata) || !validMessage(metadata.message)
               || !validId(metadata.id) || typeof metadata.name !== 'string' || metadata.name.length > 200 || metadata.size !== bytes.byteLength
               || !profiles.has(peerId) || isConflicted(profiles.get(peerId)) || seen.has(`${peerId}:${metadata.message.id}`)) return;
             receiveMessage(metadata.message, peerId, attachment(bytes, metadata));
           };
-          room.onPeerStream = receiveStream;
-          room.onPeerTrack = (_track, stream, peerId) => receiveStream(stream, peerId);
+          room.onPeerStream = (stream, peerId) => { if (current()) receiveStream(stream, peerId); };
+          room.onPeerTrack = (_track, stream, peerId) => { if (current()) receiveStream(stream, peerId); };
+          room.onMediaPeerJoin = peerId => { if (current()) emit('media-peer-joined', { peerId }); };
+          room.onMediaPeerLeave = peerId => { if (current()) emit('media-peer-left', { peerId }); };
+          room.onConnectionState = state => {
+            if (!current()) return;
+            transportOnline = state !== 'offline';
+            if (transportOnline) presence();
+            else setStatus('offline');
+          };
           room.onPeerLeave = peerId => {
+            if (!current()) return;
             peerIds.delete(peerId);
             profiles.delete(peerId);
             folderService.peerLeft(peerId);
@@ -214,14 +268,14 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
             presence();
           };
           room.onPeerJoin = peerId => {
-            if (left || peerId === user.id) return;
+            if (!current() || peerId === user.id) return;
             peerIds.add(peerId);
-            broadcastProfile(peerId).catch(() => emitError('connection_failed'));
+            broadcastProfile(peerId).catch(() => { if (current()) emitError('peer_connection_failed'); });
             emit('peer-joined', { peerId });
           };
           if (typeof globalThis.addEventListener === 'function') {
-            const offline = () => setStatus('offline');
-            const online = () => { if (room && !left) { setStatus(profiles.size ? 'connected' : 'waiting'); broadcastProfile().catch(() => emitError('connection_failed')); } };
+            const offline = () => { if (current()) setStatus('offline'); };
+            const online = () => { if (current() && room && transportOnline) { setStatus(profiles.size ? 'connected' : 'waiting'); broadcastProfile().catch(() => { if (current()) emitError('peer_connection_failed'); }); } };
             globalThis.addEventListener('offline', offline);
             globalThis.addEventListener('online', online);
             removeNetworkListeners = () => { globalThis.removeEventListener('offline', offline); globalThis.removeEventListener('online', online); };
@@ -230,13 +284,36 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
           if (status === 'connecting' || status === 'offline') setStatus(globalThis.navigator?.onLine === false ? 'offline' : 'waiting');
           return { user: { ...user } };
         } catch (error) {
-          folderService?.dispose();
-          if (room) { try { await room.leave(); } catch {} room = null; }
-          if (!left) { setStatus('error'); emitError(error?.code || 'connection_failed'); }
-          throw codeError(error?.code || 'connection_failed');
-        } finally { connecting = null; }
-      })();
-      return connecting;
+          const code = error?.code === 'offline' ? 'offline' : 'connection_failed';
+          if (current()) {
+            await closeTransport();
+            if (current()) { setStatus('error'); emitError(code); }
+          }
+          throw codeError(current() ? code : 'offline');
+        } finally { if (connecting === operation) connecting = null; }
+      });
+      connecting = operation;
+      return operation;
+    },
+    async reconnect() {
+      if (left) throw codeError('offline');
+      if (reconnecting) return reconnecting;
+      const operation = Promise.resolve().then(async () => {
+        if (left) throw codeError('offline');
+        const previousConnection = connecting;
+        lifecycle += 1;
+        // Notify call owners before replacing the transport so capture stops immediately.
+        setStatus('offline');
+        await closeTransport();
+        if (previousConnection) await previousConnection.catch(() => {});
+        if (connecting === previousConnection) connecting = null;
+        if (left) throw codeError('offline');
+        startingRetry = true;
+        try { return client.connect(); }
+        finally { startingRetry = false; }
+      }).finally(() => { if (reconnecting === operation) reconnecting = null; });
+      reconnecting = operation;
+      return operation;
     },
     async updateProfile(next = {}) {
       ensureRoom(true);
@@ -253,6 +330,7 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
     },
     async sendMessage({ text = '', file, clientId } = {}) {
       ensureRoom();
+      const generation = lifecycle;
       if (typeof text !== 'string') throw codeError('invalid_request');
       text = text.trim();
       if ([...text].length > MAX_MESSAGE_LENGTH) throw codeError('message_too_long');
@@ -267,13 +345,14 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
       let localAttachment = null;
       if (file) {
         const bytes = new Uint8Array(await file.arrayBuffer());
+        if (generation !== lifecycle || left) throw codeError('offline');
         if (bytes.byteLength > MAX_ATTACHMENT_BYTES || bytes.byteLength !== file.size) throw codeError('file_too_large');
         const metadata = { id: crypto.randomUUID(), name: safeName(file.name), mimeType: file.type || '', size: bytes.byteLength, message: payload };
         if (targets.length) await fileAction.send(bytes, { target: targets, metadata });
-        if (left) throw codeError('offline');
+        if (generation !== lifecycle || left) throw codeError('offline');
         localAttachment = attachment(bytes, metadata);
       } else if (targets.length) await messageAction.send(payload, { target: targets });
-      if (left) throw codeError('offline');
+      if (generation !== lifecycle || left) throw codeError('offline');
       const message = { ...payload, userId: user.id, nickname: user.nickname, attachment: localAttachment };
       localMessages.set(id, message);
       remember(`${user.id}:${id}`);
@@ -302,20 +381,9 @@ export function createPeerRoom({ roomId, password, nickname, language, transport
     async leave() {
       if (left) return;
       left = true;
-      removeNetworkListeners();
-      folderService?.dispose();
-      if (room) {
-        room.onPeerJoin = null; room.onPeerLeave = null; room.onPeerStream = null; room.onPeerTrack = null;
-        for (const action of [profileAction, messageAction, fileAction]) if (action) { action.onMessage = null; action.onReceive = null; }
-        try { await room.leave(); } catch { /* Local cleanup still completes if the transport has already failed. */ }
-      }
-      room = null;
-      profiles.clear(); peerIds.clear(); seen.clear(); localMessages.clear();
-      for (const url of objectUrls) URL.revokeObjectURL(url);
-      objectUrls.clear();
-      user = { ...user, inCall: false, audio: false, video: false, nicknameConflict: false };
+      lifecycle += 1;
       setStatus('offline');
-      emit('presence', { users: [], total: 0 });
+      await closeTransport();
       handlers.clear();
     },
   };

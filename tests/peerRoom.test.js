@@ -357,3 +357,243 @@ test('media methods await every Trystero operation and propagate array promise f
   transport.removeStream = () => undefined;
   assert.equal(await alice.removeStream({}), undefined);
 });
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+test('reconnect preserves the current identity and invitation while revoking old media and folder consent', async (t) => {
+  const network = createNetwork();
+  const alice = makeClient(network);
+  const boris = makeClient(network, { nickname: 'Boris' });
+  t.after(() => Promise.all([alice.leave(), boris.leave()]));
+  const messages = collect(alice, 'message');
+  await alice.connect();
+  await boris.connect();
+  await settle();
+  await alice.updateProfile({ nickname: 'Alicia', language: 'uk' });
+  const oldId = alice.user.id;
+  const oldEndpoint = network.endpoints.get(oldId);
+  const { message } = await alice.sendMessage({ file: new File(['notes'], 'notes.txt') });
+  const oldUrl = message.attachment.url;
+  let disposed = 0;
+  const model = {
+    id: crypto.randomUUID(), name: 'Memories',
+    list: async () => ({ id: 'root', name: 'Memories', entries: [] }),
+    getFile: async () => { throw new Error('not requested'); },
+    dispose: () => { disposed++; },
+  };
+  await alice.shareFolder(model);
+  await alice.setCallState({ inCall: true, audio: true, video: true });
+  await settle();
+  assert.equal(alice.localSharedFolders.length, 1);
+  assert.equal(boris.sharedFolders.length, 1);
+  const connected = await alice.reconnect();
+  await settle();
+  assert.notEqual(connected.user.id, oldId);
+  assert.equal(connected.user.id, alice.user.id);
+  assert.equal(connected.user.nickname, 'Alicia');
+  assert.equal(connected.user.language, 'uk');
+  assert.equal(network.endpoints.has(oldId), false, 'the previous transport must be closed');
+  const newEndpoint = network.endpoints.get(alice.user.id);
+  assert.equal(newEndpoint.scope, oldEndpoint.scope);
+  assert.equal(newEndpoint.roomId, oldEndpoint.roomId);
+  assert.equal(newEndpoint.config.password, oldEndpoint.config.password);
+  assert.equal(alice.status, 'connected');
+  assert.equal(alice.user.inCall, false);
+  assert.equal(alice.user.audio, false);
+  assert.equal(alice.user.video, false);
+  assert.equal(disposed, 1);
+  assert.deepEqual(alice.localSharedFolders, []);
+  assert.deepEqual(boris.sharedFolders, [], 'reconnecting must not automatically share the old folder again');
+  await assert.rejects(fetch(oldUrl));
+  await boris.sendMessage({ text: 'Welcome back, Alicia!' });
+  await settle();
+  assert.equal(messages.at(-1).text, 'Welcome back, Alicia!', 'subscribed UI listeners must survive a retry');
+});
+
+test('simultaneous retries create one replacement transport and release browser listeners on leave', async (t) => {
+  const network = createNetwork();
+  let calls = 0;
+  const originalAdd = Object.getOwnPropertyDescriptor(globalThis, 'addEventListener');
+  const originalRemove = Object.getOwnPropertyDescriptor(globalThis, 'removeEventListener');
+  const browserEvents = new EventTarget();
+  const registered = new Map();
+  Object.defineProperty(globalThis, 'addEventListener', { configurable: true, writable: true, value: (type, handler) => {
+    if (!registered.has(type)) registered.set(type, new Set());
+    registered.get(type).add(handler);
+    browserEvents.addEventListener(type, handler);
+  } });
+  Object.defineProperty(globalThis, 'removeEventListener', { configurable: true, writable: true, value: (type, handler) => {
+    registered.get(type)?.delete(handler);
+    browserEvents.removeEventListener(type, handler);
+  } });
+  const countListeners = () => [...registered.values()].reduce((count, values) => count + values.size, 0);
+  const alice = makeClient(network, { transportFactory: (...args) => { calls++; return network.factory(...args); } });
+  t.after(async () => {
+    await alice.leave();
+    if (originalAdd) Object.defineProperty(globalThis, 'addEventListener', originalAdd);
+    else delete globalThis.addEventListener;
+    if (originalRemove) Object.defineProperty(globalThis, 'removeEventListener', originalRemove);
+    else delete globalThis.removeEventListener;
+  });
+  await alice.connect();
+  assert.equal(calls, 1);
+  assert.equal(countListeners(), 2);
+  const results = await Promise.all([alice.reconnect(), alice.reconnect(), alice.reconnect()]);
+  await settle();
+  assert.equal(calls, 2, 'all retry clicks must share the same replacement connection');
+  assert.equal(new Set(results.map(result => result.user.id)).size, 1);
+  assert.equal(network.endpoints.size, 1);
+  assert.equal(alice.status, 'waiting');
+  assert.equal(countListeners(), 2, 'retries must replace browser callbacks rather than accumulate them');
+  await alice.leave();
+  assert.equal(countListeners(), 0);
+  browserEvents.dispatchEvent(new Event('online'));
+  browserEvents.dispatchEvent(new Event('offline'));
+  await settle();
+  assert.equal(alice.status, 'offline');
+  assert.equal(network.endpoints.size, 0);
+});
+
+test('callbacks retained from an old transport cannot mutate a reconnected room', async (t) => {
+  const network = createNetwork();
+  const alice = makeClient(network);
+  const boris = makeClient(network, { nickname: 'Boris' });
+  t.after(() => Promise.all([alice.leave(), boris.leave()]));
+  await alice.connect();
+  await boris.connect();
+  await settle();
+  const old = network.endpoints.get(alice.user.id);
+  const stale = {
+    join: old.room.onPeerJoin,
+    leave: old.room.onPeerLeave,
+    stream: old.room.onPeerStream,
+    track: old.room.onPeerTrack,
+    profile: old.actions.get('profile').onMessage,
+    message: old.actions.get('message').onMessage,
+    error: old.callbacks.onJoinError,
+  };
+  await alice.reconnect();
+  await settle();
+  await alice.setCallState({ inCall: true, audio: true, video: true });
+  await boris.setCallState({ inCall: true, audio: true, video: true });
+  await settle();
+  const events = Object.fromEntries(['presence', 'profile', 'message', 'stream', 'peer-joined', 'peer-left', 'error', 'peer-connection-error', 'status'].map(event => [event, collect(alice, event)]));
+  const before = { users: alice.users, status: alice.status, transmissions: network.transmissions.length };
+  await stale.join('ghost-from-old-room');
+  await stale.profile({ nickname: 'Zombie', language: 'ru', claimedAt: Date.now(), inCall: true, audio: true, video: true }, { peerId: boris.user.id });
+  await stale.message({ id: 'stale-message', text: 'This belongs to the closed connection', sourceLanguage: 'en', createdAt: new Date().toISOString() }, { peerId: boris.user.id });
+  const stream = { id: 'stale-stream' };
+  await stale.stream(stream, boris.user.id);
+  await stale.track({ id: 'stale-track' }, stream, boris.user.id);
+  await stale.leave(boris.user.id);
+  await stale.error({ peerId: boris.user.id, error: new Error('Late handshake error') });
+  await settle();
+  assert.deepEqual(alice.users, before.users);
+  assert.equal(alice.status, before.status);
+  assert.equal(network.transmissions.length, before.transmissions);
+  for (const [event, values] of Object.entries(events)) assert.deepEqual(values, [], `stale ${event} callback must have no effect`);
+});
+
+test('a failed peer handshake is nonfatal while creating the transport can fail and be retried', async (t) => {
+  const network = createNetwork();
+  let fail = true;
+  const alice = makeClient(network, { transportFactory: (...args) => {
+    if (fail) throw new Error('Low-level factory failure');
+    return network.factory(...args);
+  } });
+  const boris = makeClient(network, { nickname: 'Boris' });
+  t.after(() => Promise.all([alice.leave(), boris.leave()]));
+  const errors = collect(alice, 'error');
+  const peerErrors = collect(alice, 'peer-connection-error');
+  await assert.rejects(alice.connect(), /connection_failed/);
+  assert.equal(alice.status, 'error');
+  assert.equal(alice.connected, false);
+  assert.equal(errors.at(-1).code, 'connection_failed');
+  fail = false;
+  await alice.reconnect();
+  const current = network.endpoints.get(alice.user.id);
+  assert.equal(alice.status, 'waiting');
+  current.callbacks.onJoinError({ peerId: 'unreachable-peer', error: new Error('ICE negotiation failed') });
+  assert.equal(alice.status, 'waiting');
+  assert.equal(alice.connected, true);
+  assert.equal(errors.at(-1).code, 'peer_connection_failed');
+  assert.equal(peerErrors.at(-1).code, 'peer_connection_failed');
+  await boris.connect();
+  await settle();
+  current.callbacks.onJoinError({ peerId: boris.user.id, error: new Error('A peer cannot establish media') });
+  assert.equal(alice.status, 'connected');
+  assert(alice.users.some(user => user.id === boris.user.id));
+  assert.equal(peerErrors.at(-1).code, 'peer_connection_failed');
+});
+
+test('leaving cancels pending connection and retry attempts without opening another transport', async (t) => {
+  const network = createNetwork();
+  const gate = deferred();
+  let calls = 0;
+  let callbacks;
+  const alice = makeClient(network, { transportFactory: async (...args) => {
+    calls++;
+    callbacks = args[2];
+    await gate.promise;
+    return network.factory(...args);
+  } });
+  t.after(async () => { gate.resolve(); await alice.leave(); });
+  const original = alice.connect();
+  const originalRejection = assert.rejects(original, /offline/);
+  const retry = alice.reconnect();
+  const retryRejection = assert.rejects(retry, /offline/);
+  await tick();
+  const leaving = alice.leave();
+  gate.resolve();
+  await leaving;
+  await Promise.all([originalRejection, retryRejection]);
+  await settle();
+  assert.equal(calls, 1);
+  assert.equal(network.endpoints.size, 0);
+  assert.equal(alice.status, 'offline');
+  assert.equal(alice.connected, false);
+  const statuses = collect(alice, 'status');
+  const errors = collect(alice, 'error');
+  callbacks.onJoinError({ peerId: 'late-peer', error: new Error('late') });
+  await settle();
+  assert.deepEqual(statuses, []);
+  assert.deepEqual(errors, []);
+  await assert.rejects(alice.connect(), /offline/);
+  await assert.rejects(alice.reconnect(), /offline/);
+  assert.equal(calls, 1);
+});
+
+test('a transport outage revokes folder consent even while the browser remains online', async (t) => {
+  const network = createNetwork();
+  const alice = makeClient(network);
+  const boris = makeClient(network, { nickname: 'Boris' });
+  t.after(() => Promise.all([alice.leave(), boris.leave()]));
+  await alice.connect(); await boris.connect(); await settle();
+  let released = 0;
+  await alice.shareFolder({
+    id: crypto.randomUUID(), name: 'Chosen folder',
+    list: async () => ({ id: 'root', name: 'Chosen folder', entries: [] }),
+    getFile: async () => { throw new Error('not requested'); },
+    dispose: () => { released++; },
+  });
+  await alice.setCallState({ inCall: true, audio: true });
+  const transport = network.endpoints.get(alice.user.id).room;
+  transport.onConnectionState('offline');
+  await settle();
+  assert.equal(alice.status, 'offline');
+  assert.equal(alice.user.inCall, false);
+  assert.equal(released, 1);
+  assert.deepEqual(alice.localSharedFolders, []);
+  await boris.updateProfile({ language: 'it' });
+  await settle();
+  assert.equal(alice.status, 'offline', 'a late profile cannot override the transport outage');
+  transport.onConnectionState('waiting');
+  await settle();
+  assert.equal(alice.status, 'connected');
+  assert.deepEqual(alice.localSharedFolders, [], 'network recovery never restores folder-sharing consent');
+});

@@ -16,6 +16,8 @@ Il sito usa GitHub Pages ed è compilato nella cartella `docs/` del repository. 
 
 L’indirizzo è `https://alfredogol91-glitch.github.io/chattamento/`. Gli aggiornamenti diventano visibili quando GitHub completa la pubblicazione dei file caricati in `main/docs`. Il repository contiene anche lo ZIP pronto; non è necessario scaricarlo per usare questo metodo.
 
+Dopo l’aggiornamento del collegamento della chat, chiudi le vecchie schede e apri [la versione aggiornata](https://alfredogol91-glitch.github.io/chattamento/?v=2), poi copia un nuovo invito dall’app. Il parametro `v=2`, presente anche nei nuovi inviti, evita di riutilizzare la pagina precedente dalla cache; stanza e chiave rimangono nella parte dopo `#`.
+
 Per rigenerare la versione GitHub Pages dopo modifiche al codice, esegui `npm run build:github`, conserva il file `docs/.nojekyll` e carica i file aggiornati nel repository.
 
 ## Alternativa: pubblicare lo ZIP su Netlify Drop
@@ -63,7 +65,7 @@ Un indicatore mostra quando la condivisione è attiva e il comando **Interrompi 
 
 Per la selezione diretta di una cartella usa una versione recente di **Chrome o Edge su computer**, su un sito HTTPS. La disponibilità dipende dal browser e dal dispositivo: non tutti i telefoni o browser permettono di selezionare cartelle. Quando il browser offre invece una selezione dei file contenuti in una cartella, vengono condivisi solo i file selezionati in quel momento: le cartelle vuote e le modifiche successive non sono incluse. Per aggiornare quella selezione, scegli e condividi nuovamente la cartella.
 
-Nomi, autorizzazioni e contenuti delle cartelle condivise non vengono archiviati su un server dell’app e non vengono ripristinati nella sessione successiva. **Il consenso non viene ripristinato automaticamente:** dopo l’uscita o il ricaricamento devi scegliere la cartella e confermare di nuovo la condivisione, anche se il browser ricorda un permesso di lettura già concesso. I file passano tra i browser solo quando richiesti. Non vengono inviati al servizio di traduzione.
+L’app non mantiene un archivio online dei nomi, delle autorizzazioni o dei contenuti delle cartelle e non li ripristina nella sessione successiva. **Il consenso non viene ripristinato automaticamente:** dopo l’uscita o il ricaricamento devi scegliere la cartella e confermare di nuovo la condivisione, anche se il browser ricorda un permesso di lettura già concesso. Gli elenchi e i file richiesti passano attraverso servizi pubblici di inoltro dopo essere stati cifrati nel browser. Non vengono inviati al servizio di traduzione.
 
 ## Cosa resta quando chiudi la pagina
 
@@ -73,11 +75,17 @@ Non ci sono consegna a chi è offline, sincronizzazione della cronologia o archi
 
 ## Traduzioni e collegamenti gratuiti
 
-Il testo viene tradotto dal servizio esterno **MyMemory**, senza una chiave API da inserire. Il contenuto dei messaggi viene quindi inviato a quel servizio: non condividere informazioni che non vuoi affidargli. MyMemory ha una quota gratuita limitata; disponibilità e qualità delle traduzioni non sono garantite. Se la traduzione non riesce, viene mostrato il testo originale con un avviso. Una traduzione può comparire qualche istante dopo il messaggio.
+Il testo viene tradotto dal servizio esterno **MyMemory**, senza una chiave API da inserire. Il browser invia a quel servizio il testo originale da tradurre: questo trattamento è distinto dalla cifratura della chat. MyMemory ha una quota gratuita limitata; disponibilità e qualità delle traduzioni non sono garantite. Se la traduzione non riesce, viene mostrato il testo originale con un avviso. Una traduzione può comparire qualche istante dopo il messaggio. Audio, video, allegati ed elenchi delle cartelle non vengono inviati al traduttore.
 
-Le stanze usano **WebRTC** e collegamenti pubblici di segnalazione per far incontrare i browser; non richiedono un backend dell’app. Il traffico tra partecipanti dipende dalla raggiungibilità delle rispettive reti e dai servizi pubblici usati per la connessione. Il sito deve essere aperto tramite **HTTPS**; per lo sviluppo è consentito anche `localhost`. Aprire il file direttamente con `file://` non equivale a pubblicarlo e non è un metodo supportato.
+**Testo, allegati e cartelle condivise** usano due servizi pubblici gratuiti di inoltro MQTT su WebSocket sicuro: HiveMQ (`wss://broker.hivemq.com:8884/mqtt`) ed EMQX (`wss://broker.emqx.io:8084/mqtt`). Non servono account o pagamenti per collegarsi a questi servizi. Il browser prova entrambi: i dati della chat possono essere scambiati anche quando la rete non permette collegamenti WebRTC diretti. Se la rete blocca entrambi i servizi o le rispettive porte, occorre riprovare o cambiare rete.
 
-Non è incluso un servizio TURN a pagamento. Alcune reti mobili, universitarie o aziendali possono impedire i collegamenti diretti: in quel caso l’app mostra l’errore e può essere necessario cambiare rete. Non viene promessa la compatibilità con ogni rete. Questa architettura è pensata per piccoli gruppi di amici.
+I dati vengono cifrati nel browser con **AES-GCM a 256 bit** prima dell’inoltro. I broker non ricevono in chiaro messaggi, nomi di file o contenuti dei file. Possono osservare metadati quali indirizzo IP, canale opaco della stanza, chiavi pubbliche temporanee, dimensioni e tempi dei pacchetti. Il segreto della stanza è nella parte dell’invito dopo `#`: non viene inviato al sito di hosting o ai broker nelle richieste dell’app. Chi possiede l’invito completo può comunque entrare nella stanza e leggere i contenuti, anche se lo ha ricevuto da un altro partecipante.
+
+L’app apre sessioni MQTT non persistenti (`cleanSession=true`), pubblica senza conservazione dei messaggi (`retain=false`) e ignora i messaggi conservati dai broker. La cronologia disponibile è solo nella memoria della scheda aperta. Questo comportamento non garantisce che i fornitori pubblici non conservino propri log o metadati: non sono servizi amministrati da Chattamento e non viene offerta una garanzia di disponibilità o velocità. I trasferimenti possono fallire o rallentare, soprattutto con file grandi.
+
+**Audio e video** continuano a usare WebRTC e i servizi pubblici di segnalazione di Trystero. Il collegamento della chiamata viene associato all’identità temporanea del partecipante tramite una verifica crittografica; il nickname rimane comunque un nome scelto liberamente e non un’identità verificata. Non è configurato un server TURN: alcune reti mobili, universitarie o aziendali possono impedire le chiamate dirette anche quando testo e file funzionano. In quel caso l’app mostra l’errore e può essere necessario cambiare rete.
+
+Il sito deve essere aperto tramite **HTTPS**; per lo sviluppo è consentito anche `localhost`. Aprire il file direttamente con `file://` non equivale a pubblicarlo e non è un metodo supportato. Questa architettura è pensata per piccoli gruppi di amici, senza un backend dell’app da gestire; dipende comunque dai servizi pubblici esterni descritti sopra.
 
 ## Sviluppo
 
@@ -109,8 +117,22 @@ npm run test:e2e
 
 Il progetto attivo è un’app React/Vite che funziona nel browser. Non servono credenziali né variabili d’ambiente. `.env.example` lo ricorda: non inserire chiavi API o password nel codice del sito, perché i file pubblicati possono essere letti dai visitatori.
 
-La suite automatica copre inviti, traduzioni, conversazioni e modello delle cartelle condivise; le prove browser verificano anche consenso, navigazione, download e revoca dell’accesso alle cartelle. I test di conversazione usano un trasporto locale deterministico al posto dei collegamenti pubblici esterni e risposte di traduzione simulate. I controlli del walkie-talkie acquisiscono dispositivi simulati dal browser e verificano rilascio, tastiera, disconnessione e spegnimento dei dispositivi. I file delle prove non vengono inclusi nella build pubblicata.
+La suite automatica copre inviti, traduzioni, conversazioni e modello delle cartelle condivise; le prove browser verificano anche consenso, navigazione, download e revoca dell’accesso alle cartelle. I normali test di conversazione usano un trasporto locale deterministico al posto dei servizi pubblici esterni e risposte di traduzione simulate. Queste prove verificano l’applicazione ma non dimostrano da sole che due browser riescano a comunicare sulla rete reale. I controlli del walkie-talkie acquisiscono dispositivi simulati dal browser e verificano rilascio, tastiera, disconnessione e spegnimento dei dispositivi. I file delle prove non vengono inclusi nella build pubblicata.
 
-MyMemory è stato verificato con richieste HTTPS reali e supporta richieste dai browser (CORS); italiano, russo, spagnolo e ucraino hanno restituito traduzioni. È passata anche una traduzione reale nel browser attraverso `src/translate.js`, mantenendo la verifica TLS attiva. Nell’ambiente cloud Chromium richiede accesso autorizzato al proprio archivio NSS dei certificati, che nel sandbox ordinario è in sola lettura. Qualità e disponibilità delle traduzioni possono variare. La configurazione gestita del browser blocca UDP diretto: la verifica completa del trasporto tra due browser su reti reali resta da fare. Non sono stati disattivati i controlli TLS né le impostazioni gestite del browser.
+È disponibile una verifica separata, facoltativa, che usa realmente i servizi esterni:
+
+```sh
+npm run test:network
+```
+
+Questa prova crea una stanza nuova, apre due sessioni browser separate e scambia messaggi in entrambe le direzioni. Ripete il controllo con WebRTC disabilitato, per verificare che il trasporto dei messaggi sia indipendente dalle chiamate. Non usa il trasporto simulato delle prove ordinarie e richiede accesso ai servizi pubblici; un loro blocco o disservizio può far fallire la verifica. Per controllare il sito pubblicato anziché il server locale:
+
+```sh
+CHATTAMENTO_URL=https://alfredogol91-glitch.github.io/chattamento/ npm run test:network
+```
+
+Usa l’indirizzo base del sito, senza un invito esistente. Questa verifica riguarda la chat: non certifica il funzionamento di audio e video attraverso ogni rete.
+
+MyMemory è stato verificato con richieste HTTPS reali e supporta richieste dai browser (CORS); italiano, russo, spagnolo e ucraino hanno restituito traduzioni. È passata anche una traduzione reale nel browser attraverso `src/translate.js`, mantenendo la verifica TLS attiva. Nell’ambiente cloud Chromium richiede accesso autorizzato al proprio archivio NSS dei certificati, che nel sandbox ordinario è in sola lettura. Qualità e disponibilità delle traduzioni possono variare. La configurazione gestita del browser può bloccare UDP diretto: la verifica delle chiamate su dispositivi e reti reali rimane necessaria. Non sono stati disattivati i controlli TLS né le impostazioni gestite del browser.
 
 Le prove automatiche non sostituiscono una prova su due dispositivi, usando l’indirizzo HTTPS pubblicato. Prima di invitare tutto il gruppo, verifica con un amico un messaggio tradotto, un file, la condivisione di una cartella, il walkie-talkie e una videochiamata. La build per GitHub Pages si trova in `docs/`; ogni aggiornamento diventa pubblico dopo il caricamento nel repository e la conclusione della pubblicazione di Pages.

@@ -3,6 +3,7 @@
 export const selfId = crypto.randomUUID();
 
 export function joinRoom(config, roomId) {
+  const selfId = crypto.randomUUID();
   const actions = new Map();
   const peers = new Map();
   let joined, left;
@@ -16,6 +17,7 @@ export function joinRoom(config, roomId) {
     ws.addEventListener('error', reject, { once: true });
   });
   const room = {
+    selfId,
     makeAction(name, configuration = {}) {
       if (actions.has(name)) return actions.get(name);
       const action = {

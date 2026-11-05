@@ -26,14 +26,16 @@ class RoomError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
 
+function errorCode(error) { return typeof error === 'string' ? error : error?.code; }
+
 function errorText(error, t) {
-  const code = typeof error === 'string' ? error : error?.code;
+  const code = errorCode(error);
   const mapping = {
     network: 'errorNetwork', invalid_nickname: 'errorInvalidNickname', nickname_taken: 'errorNicknameTaken',
     invalid_language: 'errorInvalidLanguage', message_too_long: 'errorMessageTooLong',
     file_too_large: 'errorFileTooLarge', upload_failed: 'transferFailed', transfer_failed: 'transferFailed',
     rate_limited: 'errorRateLimited', message_required: 'emptyMessage', no_peers: 'waitingForFriends',
-    nickname_conflict: 'nicknameConflict', connection_failed: 'roomConnectionError', offline: 'roomOffline',
+    nickname_conflict: 'nicknameConflict', connection_failed: 'roomConnectionError', peer_connection_failed: 'peerConnectionError', offline: 'roomOffline',
     folder_permission_denied: 'foldersPermissionDenied', folder_revoked: 'foldersRevoked', folder_not_found: 'foldersUnavailable',
     folder_file_unavailable: 'foldersUnavailable', folder_unavailable: 'foldersUnavailable', folder_too_large: 'foldersTooLarge',
   };
@@ -290,6 +292,7 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [localFolders, setLocalFolders] = useState(roomClient.localSharedFolders || []);
   const [stoppingFolders, setStoppingFolders] = useState(false);
+  const [retryingConnection, setRetryingConnection] = useState(false);
   const [unread, setUnread] = useState(0);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
@@ -298,12 +301,18 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
   const forceBottom = useRef(true);
   const knownIds = useRef(new Set());
   const userRef = useRef(user);
+  const mounted = useRef(true);
+  const retryInProgress = useRef(false);
+  const connectionAttempt = useRef(0);
   userRef.current = user;
   const selectedLanguage = languages.find(item => item.code === language);
   const locale = localeFor(language);
   const onlineUsers = users.length ? users : [user];
-  const canSend = status === 'connected' && !conflict;
-  const isWaiting = status === 'waiting';
+  const canSend = status === 'connected' && !conflict && !retryingConnection;
+  const hasConnectionError = ['connection_failed', 'peer_connection_failed'].includes(errorCode(error));
+  const connectionFailed = hasConnectionError || ['error', 'failed', 'peer-failed'].includes(status);
+  const showConnectionFailureIntro = connectionFailed && status !== 'connected' && !retryingConnection;
+  const isWaiting = status === 'waiting' && !connectionFailed;
 
   useEffect(() => {
     const media = matchMedia('(max-width: 640px)');
@@ -321,17 +330,22 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
 
   useEffect(() => {
     let active = true;
+    const attempt = connectionAttempt.current;
     const subscriptions = [
       roomClient.on('message', mergeMessage),
       roomClient.on('presence', data => { if (active) setUsers(data.users || []); }),
-      roomClient.on('status', value => { if (active) setStatus(value); }),
+      roomClient.on('status', value => {
+        if (!active) return;
+        setStatus(value);
+        if (value === 'connected') setError(current => ['connection_failed', 'peer_connection_failed'].includes(errorCode(current)) ? null : current);
+      }),
       roomClient.on('profile', profile => { if (active) setUser(profile.user || profile); }),
       roomClient.on('error', err => { if (active) setError(err); }),
       roomClient.on('nickname-conflict', () => { if (active) { setConflict(true); setEditNickname(true); } }),
       roomClient.on('folders', data => { if (active) setLocalFolders(data.local || []); }),
     ];
-    roomClient.connect().then(() => { if (active) setUser(roomClient.user); }).catch(err => { if (active) { setError(err); setStatus('error'); } });
-    return () => { active = false; for (const unsubscribe of subscriptions) unsubscribe?.(); roomClient.leave(); };
+    roomClient.connect().then(() => { if (active && attempt === connectionAttempt.current) setUser(roomClient.user); }).catch(err => { if (active && attempt === connectionAttempt.current) { setError(err); setStatus('error'); } });
+    return () => { active = false; mounted.current = false; for (const unsubscribe of subscriptions) unsubscribe?.(); roomClient.leave(); };
   }, [roomClient]);
 
   useLayoutEffect(() => {
@@ -380,7 +394,23 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
     nearBottom.current = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
     if (nearBottom.current) setUnread(0);
   };
-  const statusKey = status === 'connected' ? 'connected' : isWaiting ? 'waitingForFriends' : status === 'connecting' ? 'roomConnecting' : status === 'error' ? 'roomConnectionError' : 'roomOffline';
+  const retryConnection = async () => {
+    if (retryInProgress.current) return;
+    retryInProgress.current = true; setRetryingConnection(true);
+    const attempt = ++connectionAttempt.current;
+    setRawMessages([]); knownIds.current.clear(); setUnread(0); forceBottom.current = true;
+    try {
+      await roomClient.reconnect();
+      if (mounted.current && attempt === connectionAttempt.current) setUser(roomClient.user);
+    } catch (err) {
+      if (mounted.current && attempt === connectionAttempt.current) { setError(err?.code ? err : new RoomError('connection_failed')); setStatus('error'); }
+    } finally {
+      retryInProgress.current = false;
+      if (mounted.current) setRetryingConnection(false);
+    }
+  };
+  const statusKey = retryingConnection ? 'reconnecting' : status === 'connected' ? 'connected' : status === 'connecting' ? 'roomConnecting' : connectionFailed ? 'roomConnectionError' : isWaiting ? 'waitingForFriends' : 'roomOffline';
+  const connectionFeedbackKey = retryingConnection ? 'reconnecting' : errorCode(error) === 'peer_connection_failed' ? 'peerConnectionError' : errorCode(error) === 'connection_failed' ? 'roomConnectionError' : statusKey;
   const stopFolders = async () => {
     setStoppingFolders(true);
     try { for (const folder of localFolders) await roomClient.stopSharingFolder(folder.id); }
@@ -400,12 +430,12 @@ function Chat({ session, user, setUser, language, setLanguage, onLeave, t }) {
     </aside>
     <main className="chat-main">
       <header className="room-header"><div className="room-header-title"><button className="icon-button sidebar-toggle" type="button" aria-label={t('participants')} onClick={() => setSidebarOpen(true)}><Icon name="menu" /></button><span className="header-room-icon"><Icon name="chat" size={24} /></span><div><h1>{t('roomName')}</h1><p><span className={`status-dot ${status === 'connected' ? '' : 'status-offline'}`} />{t(statusKey)}<span className="header-dot">·</span><span className="header-room-description">{t('onlineCount', { count: onlineUsers.length })}</span></p></div></div><button type="button" className="button button-primary invite-header-button" onClick={() => setInviteOpen(true)}><Icon name="users" size={16} /><span>{t('inviteFriends')}</span></button></header>
-      {(status === 'offline' || status === 'error') && <div className="connection-banner" role="status"><Icon name="info" size={15} />{t(statusKey)}</div>}
+      {(status === 'offline' || connectionFailed || retryingConnection) && <div className="connection-banner" role="status" style={{ flexWrap: 'wrap' }}>{retryingConnection ? <Spinner small /> : <Icon name="info" size={15} />}<span style={{ flex: '1 1 220px' }}>{t(connectionFeedbackKey)}</span><button className="button button-secondary" type="button" onClick={retryConnection} disabled={retryingConnection} aria-label={t('retryConnection')} style={{ minHeight: 32, padding: '6px 10px', fontSize: 11 }}>{t(retryingConnection ? 'reconnecting' : 'retryConnection')}</button></div>}
       <div className="folders-toolbar"><button className="folders-open-button" type="button" onClick={() => setFoldersOpen(true)}><Icon name="folder" size={17} />{t('foldersOpen')}</button>{localFolders.length > 0 && <div className="folders-toolbar-live"><span className="status-dot" /><strong>{t('foldersSharingLive')}</strong><button type="button" onClick={stopFolders} disabled={stoppingFolders}>{t('foldersStop')}</button></div>}</div>
       <div className="call-area"><CallPanel roomClient={roomClient} user={user} users={onlineUsers} t={t} /></div>
       <div className="conversation-body">
         <div className="messages-scroll" ref={scrollRef} onScroll={onScroll}>
-          <div className="message-history-intro"><span className="history-intro-icon"><Icon name={isWaiting ? 'users' : 'chat'} size={27} /></span><h2>{t(isWaiting ? 'waitingForFriends' : 'chatWelcome')}</h2><p>{t(isWaiting ? 'waitingDescription' : 'chatWelcomeHint')}</p>{isWaiting && <button className="button button-secondary empty-invite" type="button" onClick={() => setInviteOpen(true)}><Icon name="users" size={15} />{t('inviteFriends')}</button>}<span className="history-intro-language-line">{languages.map(item => <span key={item.code} aria-hidden="true">{item.flag}</span>)}</span></div>
+          <div className="message-history-intro"><span className="history-intro-icon"><Icon name={showConnectionFailureIntro ? 'info' : isWaiting ? 'users' : 'chat'} size={27} /></span><h2>{t(showConnectionFailureIntro ? 'roomConnectionErrorTitle' : isWaiting ? 'waitingForFriends' : 'chatWelcome')}</h2><p>{t(showConnectionFailureIntro ? errorCode(error) === 'peer_connection_failed' ? 'peerConnectionError' : 'roomConnectionError' : isWaiting ? 'waitingDescription' : 'chatWelcomeHint')}</p>{isWaiting && <button className="button button-secondary empty-invite" type="button" onClick={() => setInviteOpen(true)}><Icon name="users" size={15} />{t('inviteFriends')}</button>}<span className="history-intro-language-line">{languages.map(item => <span key={item.code} aria-hidden="true">{item.flag}</span>)}</span></div>
           <div className="messages" role="log" aria-live="polite" aria-relevant="additions text" aria-label={t('roomName')}>
             {messages.map((message, index) => {
               const previous = messages[index - 1];

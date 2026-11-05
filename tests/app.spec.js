@@ -144,3 +144,30 @@ test('mobile room and invitation dialog fit a narrow display', async ({ browser 
     await expect(page.getByRole('heading', { name: getT('ru')('roomName'), exact: true })).toBeVisible();
   } finally { await context.close(); }
 });
+
+test('connection retry keeps the invitation and rejoins the same friends without losing the draft', async ({ browser }) => {
+  const ownerContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  await Promise.all([ownerContext, guestContext].map(mockTranslations));
+  try {
+    const owner = await ownerContext.newPage();
+    const guest = await guestContext.newPage();
+    await join(owner, 'RetryOwner', 'it');
+    const invitation = owner.url();
+    await join(guest, 'RetryGuest', 'it', invitation);
+    await expect(owner.locator('.people-list .person')).toHaveCount(2);
+    const draft = owner.getByRole('textbox', { name: getT('it')('sendMessage'), exact: true });
+    await draft.fill('La mia bozza resta qui');
+    await owner.evaluate(() => window.dispatchEvent(new Event('offline')));
+    const retry = owner.getByRole('button', { name: getT('it')('retryConnection'), exact: true });
+    await expect(retry).toBeVisible();
+    await retry.click();
+    await expect(owner.locator('.people-list .person')).toHaveCount(2);
+    await expect(guest.locator('.people-list .person')).toHaveCount(2);
+    await expect(owner.locator('.connection-banner')).toHaveCount(0);
+    expect(owner.url()).toBe(invitation);
+    await expect(draft).toHaveValue('La mia bozza resta qui');
+    await owner.getByRole('button', { name: getT('it')('send'), exact: true }).click();
+    await expect(guest.getByRole('log').getByText('La mia bozza resta qui', { exact: true })).toBeVisible();
+  } finally { await ownerContext.close(); await guestContext.close(); }
+});

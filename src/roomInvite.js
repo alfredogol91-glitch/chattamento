@@ -25,7 +25,9 @@ export function readInvitation(hash = globalThis.location?.hash || '') {
 export function invitationUrl(invitation, baseUrl = globalThis.location?.href) {
   if (!roomPattern.test(invitation?.roomId || '') || !keyPattern.test(invitation?.password || '')) throw new Error('invalid_invite');
   const url = new URL(baseUrl);
-  url.search = '';
+  // Keep invitations on the current transport version even when a browser
+  // still has the previous site's HTML cached under its unversioned URL.
+  url.search = '?v=2';
   url.hash = new URLSearchParams({ room: invitation.roomId, key: invitation.password }).toString();
   return url.toString();
 }
